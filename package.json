@@ -17,6 +17,7 @@
     "@fastify/cors": "latest",
     "@fastify/helmet": "latest",
     "@fastify/sensible": "latest",
+    "dotenv": "^17.4.2",
     "drizzle-orm": "latest",
     "fastify": "latest",
     "pg": "latest",
