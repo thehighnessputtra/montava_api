@@ -14,9 +14,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@better-auth/drizzle-adapter": "^1.7.5",
     "@fastify/cors": "latest",
     "@fastify/helmet": "latest",
     "@fastify/sensible": "latest",
+    "better-auth": "^1.7.5",
     "dotenv": "^17.4.2",
     "drizzle-orm": "latest",
     "fastify": "latest",
