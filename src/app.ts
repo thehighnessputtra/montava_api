@@ -17,5 +17,18 @@ export function buildApp() {
     },
   }));
 
+  app.register(
+    async (api) => {
+      api.get("/health", async () => ({
+        data: {
+          status: "ok",
+          service: "montava-api",
+          version: "v1",
+        },
+      }));
+    },
+    { prefix: "/api/v1" },
+  );
+
   return app;
 }
