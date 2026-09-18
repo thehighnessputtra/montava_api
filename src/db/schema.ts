@@ -1,17 +1,16 @@
-import { relations } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import {
-  bigint,
   boolean,
-  check,
   index,
+  integer,
   pgEnum,
   pgTable,
+  text,
   timestamp,
-  uniqueIndex,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
-import { sql } from "drizzle-orm";
+import { relations } from "drizzle-orm";
 
 export const transactionTypeEnum = pgEnum("transaction_type", [
   "income",
@@ -27,194 +26,232 @@ export const transactionStatusEnum = pgEnum("transaction_status", [
   "cancelled",
 ]);
 
-export const goalStatusEnum = pgEnum("goal_status", [
+export const financialGoalStatusEnum = pgEnum("financial_goal_status", [
   "active",
   "completed",
   "cancelled",
 ]);
 
 export const users = pgTable("users", {
-  id: uuid("id").defaultRandom().primaryKey(),
+  id: uuid("id").primaryKey().defaultRandom(),
+
   email: varchar("email", { length: 320 }).notNull().unique(),
   name: varchar("name", { length: 120 }).notNull(),
+
   emailVerified: boolean("email_verified").notNull().default(false),
   image: varchar("image", { length: 500 }),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+export const sessions = pgTable(
+  "session",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+
+    expiresAt: timestamp("expires_at").notNull(),
+    token: text("token").notNull().unique(),
+
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+
+    ipAddress: text("ip_address"),
+    userAgent: text("user_agent"),
+
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+  },
+  (table) => ({
+    userIdIdx: index("session_user_id_idx").on(table.userId),
+  }),
+);
+
+export const accounts = pgTable(
+  "account",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+
+    accountId: text("account_id").notNull(),
+    providerId: text("provider_id").notNull(),
+
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    idToken: text("id_token"),
+
+    accessTokenExpiresAt: timestamp("access_token_expires_at"),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at"),
+
+    scope: text("scope"),
+    password: text("password"),
+
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: index("account_user_id_idx").on(table.userId),
+  }),
+);
+
+export const verifications = pgTable(
+  "verification",
+  {
+    id: text("id").primaryKey(),
+
+    identifier: text("identifier").notNull(),
+    value: text("value").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    identifierIdx: index("verification_identifier_idx").on(
+      table.identifier,
+    ),
+  }),
+);
 
 export const wallets = pgTable(
   "wallets",
   {
-    id: uuid("id").defaultRandom().primaryKey(),
+    id: uuid("id").primaryKey().defaultRandom(),
+
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
-    name: varchar("name", { length: 120 }).notNull(),
-    description: varchar("description", { length: 500 }),
-    initialBalance: bigint("initial_balance", { mode: "number" })
-      .notNull()
-      .default(0),
-    balance: bigint("balance", { mode: "number" })
-      .notNull()
-      .default(0),
+
+    name: varchar("name", { length: 100 }).notNull(),
+    description: text("description"),
+
+    initialBalance: integer("initial_balance").notNull().default(0),
+    balance: integer("balance").notNull().default(0),
+
     currency: varchar("currency", { length: 3 }).notNull().default("IDR"),
-    archivedAt: timestamp("archived_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+
+    archivedAt: timestamp("archived_at"),
+
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
-  (table) => [
-    index("wallets_user_id_idx").on(table.userId),
-    check(
-      "wallets_initial_balance_non_negative",
-      sql`${table.initialBalance} >= 0`,
-    ),
-    check("wallets_balance_non_negative", sql`${table.balance} >= 0`),
-  ],
+  (table) => ({
+    userIdIdx: index("wallets_user_id_idx").on(table.userId),
+  }),
 );
 
 export const categories = pgTable(
   "categories",
   {
-    id: uuid("id").defaultRandom().primaryKey(),
+    id: uuid("id").primaryKey().defaultRandom(),
+
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
-    name: varchar("name", { length: 120 }).notNull(),
-    description: varchar("description", { length: 500 }),
-    archivedAt: timestamp("archived_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+
+    name: varchar("name", { length: 100 }).notNull(),
+
+    archivedAt: timestamp("archived_at"),
+
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
-  (table) => [
-    uniqueIndex("categories_user_name_unique").on(table.userId, table.name),
-    index("categories_user_id_idx").on(table.userId),
-  ],
+  (table) => ({
+    userIdIdx: index("categories_user_id_idx").on(table.userId),
+  }),
 );
 
 export const financialGoals = pgTable(
   "financial_goals",
   {
-    id: uuid("id").defaultRandom().primaryKey(),
+    id: uuid("id").primaryKey().defaultRandom(),
+
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
-    name: varchar("name", { length: 160 }).notNull(),
-    targetAmount: bigint("target_amount", { mode: "number" })
-      .notNull(),
-    totalContributed: bigint("total_contributed", { mode: "number" })
+
+    name: varchar("name", { length: 120 }).notNull(),
+
+    targetAmount: integer("target_amount").notNull().default(0),
+    totalContributed: integer("total_contributed").notNull().default(0),
+    allocatedAmount: integer("allocated_amount").notNull().default(0),
+    spentAmount: integer("spent_amount").notNull().default(0),
+    returnedAmount: integer("returned_amount").notNull().default(0),
+
+    targetDate: timestamp("target_date"),
+
+    status: financialGoalStatusEnum("status")
       .notNull()
-      .default(0),
-    allocatedAmount: bigint("allocated_amount", { mode: "number" })
-      .notNull()
-      .default(0),
-    spentAmount: bigint("spent_amount", { mode: "number" })
-      .notNull()
-      .default(0),
-    returnedAmount: bigint("returned_amount", { mode: "number" })
-      .notNull()
-      .default(0),
-    targetDate: timestamp("target_date", { withTimezone: false }),
-    status: goalStatusEnum("status").notNull().default("active"),
-    archivedAt: timestamp("archived_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+      .default("active"),
+
+    archivedAt: timestamp("archived_at"),
+
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
-  (table) => [
-    index("financial_goals_user_id_idx").on(table.userId),
-    check(
-      "financial_goals_target_positive",
-      sql`${table.targetAmount} > 0`,
-    ),
-    check(
-      "financial_goals_total_non_negative",
-      sql`${table.totalContributed} >= 0`,
-    ),
-    check(
-      "financial_goals_allocated_non_negative",
-      sql`${table.allocatedAmount} >= 0`,
-    ),
-    check(
-      "financial_goals_spent_non_negative",
-      sql`${table.spentAmount} >= 0`,
-    ),
-    check(
-      "financial_goals_returned_non_negative",
-      sql`${table.returnedAmount} >= 0`,
-    ),
-    check(
-      "financial_goals_aggregate_consistent",
-      sql`${table.totalContributed} = ${table.allocatedAmount} + ${table.spentAmount} + ${table.returnedAmount}`,
-    ),
-  ],
+  (table) => ({
+    userIdIdx: index("financial_goals_user_id_idx").on(table.userId),
+  }),
 );
 
 export const transactions = pgTable(
   "transactions",
   {
-    id: uuid("id").defaultRandom().primaryKey(),
+    id: uuid("id").primaryKey().defaultRandom(),
+
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id),
+
     type: transactionTypeEnum("type").notNull(),
+
     walletId: uuid("wallet_id").references(() => wallets.id),
+
     fromWalletId: uuid("from_wallet_id").references(() => wallets.id),
+
     toWalletId: uuid("to_wallet_id").references(() => wallets.id),
+
     goalId: uuid("goal_id").references(() => financialGoals.id),
+
     categoryId: uuid("category_id").references(() => categories.id),
-    amount: bigint("amount", { mode: "number" }).notNull(),
-    description: varchar("description", { length: 500 }),
-    transactionDate: timestamp("transaction_date", {
-      withTimezone: false,
-    }).notNull(),
-    status: transactionStatusEnum("status").notNull().default("active"),
-    idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+
+    amount: integer("amount").notNull(),
+
+    description: text("description"),
+
+    transactionDate: timestamp("transaction_date").notNull(),
+
+    status: transactionStatusEnum("status")
+      .notNull()
+      .default("active"),
+
+    idempotencyKey: varchar("idempotency_key", { length: 255 }),
+
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
-  (table) => [
-    index("transactions_user_date_idx").on(
-      table.userId,
-      table.transactionDate,
+  (table) => ({
+    userIdIdx: index("transactions_user_id_idx").on(table.userId),
+    walletIdIdx: index("transactions_wallet_id_idx").on(table.walletId),
+    fromWalletIdIdx: index("transactions_from_wallet_id_idx").on(
+      table.fromWalletId,
     ),
-    index("transactions_wallet_id_idx").on(table.walletId),
-    index("transactions_from_wallet_id_idx").on(table.fromWalletId),
-    index("transactions_to_wallet_id_idx").on(table.toWalletId),
-    index("transactions_goal_id_idx").on(table.goalId),
-    index("transactions_category_id_idx").on(table.categoryId),
-    uniqueIndex("transactions_user_idempotency_unique").on(
-      table.userId,
-      table.idempotencyKey,
+    toWalletIdIdx: index("transactions_to_wallet_id_idx").on(
+      table.toWalletId,
     ),
-    check(
-      "transactions_amount_positive",
-      sql`${table.amount} > 0`,
+    goalIdIdx: index("transactions_goal_id_idx").on(table.goalId),
+    categoryIdIdx: index("transactions_category_id_idx").on(
+      table.categoryId,
     ),
-    check(
-      "transactions_transfer_wallets_distinct",
-      sql`${table.fromWalletId} IS NULL OR ${table.toWalletId} IS NULL OR ${table.fromWalletId} <> ${table.toWalletId}`,
-    ),
-  ],
+  }),
 );
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -222,6 +259,22 @@ export const usersRelations = relations(users, ({ many }) => ({
   categories: many(categories),
   financialGoals: many(financialGoals),
   transactions: many(transactions),
+  sessions: many(sessions),
+  accounts: many(accounts),
+}));
+
+export const sessionsRelations = relations(sessions, ({ one }) => ({
+  user: one(users, {
+    fields: [sessions.userId],
+    references: [users.id],
+  }),
+}));
+
+export const accountsRelations = relations(accounts, ({ one }) => ({
+  user: one(users, {
+    fields: [accounts.userId],
+    references: [users.id],
+  }),
 }));
 
 export const walletsRelations = relations(wallets, ({ one, many }) => ({
@@ -229,15 +282,8 @@ export const walletsRelations = relations(wallets, ({ one, many }) => ({
     fields: [wallets.userId],
     references: [users.id],
   }),
-  transactions: many(transactions, {
-    relationName: "wallet",
-  }),
-  outgoingTransfers: many(transactions, {
-    relationName: "fromWallet",
-  }),
-  incomingTransfers: many(transactions, {
-    relationName: "toWallet",
-  }),
+
+  transactions: many(transactions),
 }));
 
 export const categoriesRelations = relations(
@@ -247,6 +293,7 @@ export const categoriesRelations = relations(
       fields: [categories.userId],
       references: [users.id],
     }),
+
     transactions: many(transactions),
   }),
 );
@@ -258,6 +305,7 @@ export const financialGoalsRelations = relations(
       fields: [financialGoals.userId],
       references: [users.id],
     }),
+
     transactions: many(transactions),
   }),
 );
@@ -269,25 +317,27 @@ export const transactionsRelations = relations(
       fields: [transactions.userId],
       references: [users.id],
     }),
+
     wallet: one(wallets, {
       fields: [transactions.walletId],
       references: [wallets.id],
-      relationName: "wallet",
     }),
+
     fromWallet: one(wallets, {
       fields: [transactions.fromWalletId],
       references: [wallets.id],
-      relationName: "fromWallet",
     }),
+
     toWallet: one(wallets, {
       fields: [transactions.toWalletId],
       references: [wallets.id],
-      relationName: "toWallet",
     }),
+
     goal: one(financialGoals, {
       fields: [transactions.goalId],
       references: [financialGoals.id],
     }),
+
     category: one(categories, {
       fields: [transactions.categoryId],
       references: [categories.id],
