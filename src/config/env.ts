@@ -5,7 +5,11 @@ const envSchema = z.object({
     .enum(["development", "test", "production"])
     .default("development"),
 
-  PORT: z.coerce.number().int().positive().default(4000),
+  PORT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(4000),
 
   HOST: z.string().default("0.0.0.0"),
 
