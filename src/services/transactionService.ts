@@ -78,6 +78,10 @@ export async function cancelTransaction(userId: string, transactionId: string) {
           throw new Error("WALLET_NOT_FOUND");
         }
 
+        if (wallet.balance < transaction.amount) {
+          throw new Error("INSUFFICIENT_BALANCE");
+        }
+
         const updatedWallet = await tx
           .update(wallets)
           .set({
@@ -440,6 +444,10 @@ export async function cancelTransaction(userId: string, transactionId: string) {
           throw new Error("WALLET_NOT_FOUND");
         }
 
+        if (toWallet.balance < transaction.amount) {
+          throw new Error("INSUFFICIENT_BALANCE");
+        }
+
         const updatedFromWallet = await tx
           .update(wallets)
           .set({
@@ -477,28 +485,30 @@ export async function cancelTransaction(userId: string, transactionId: string) {
   });
 }
 
+async function getExistingTransaction(
+  tx: typeof db,
+  userId: string,
+  idempotencyKey: string,
+) {
+  const result = await tx
+    .select()
+    .from(transactions)
+    .where(
+      and(
+        eq(transactions.userId, userId),
+        eq(transactions.idempotencyKey, idempotencyKey),
+      ),
+    )
+    .limit(1);
+
+  return result[0];
+}
+
 export async function createTransaction(
   userId: string,
   input: CreateTransactionInput,
 ) {
   return db.transaction(async (tx) => {
-    const existingTransaction = await tx
-      .select()
-      .from(transactions)
-      .where(
-        and(
-          eq(transactions.userId, userId),
-          eq(transactions.idempotencyKey, input.idempotencyKey),
-        ),
-      )
-      .limit(1);
-
-    if (existingTransaction[0]) {
-      return {
-        transaction: existingTransaction[0],
-      };
-    }
-
     switch (input.type) {
       case "income": {
         const walletResult = await tx
@@ -511,37 +521,73 @@ export async function createTransaction(
               isNull(wallets.archivedAt),
             ),
           )
-          .for("update");
+          .limit(1);
 
-        const wallet = walletResult[0];
-
-        if (!wallet) {
+        if (!walletResult[0]) {
           throw new Error("WALLET_NOT_FOUND");
         }
-
-        const newBalance = wallet.balance + input.amount;
-
-        const updatedWallet = await tx
-          .update(wallets)
-          .set({
-            balance: newBalance,
-            updatedAt: new Date(),
-          })
-          .where(eq(wallets.id, wallet.id))
-          .returning();
 
         const transactionResult = await tx
           .insert(transactions)
           .values({
             userId,
             type: "income",
-            walletId: wallet.id,
+            walletId: input.walletId,
             amount: input.amount,
             description: input.description ?? null,
             transactionDate: input.transactionDate,
             categoryId: input.categoryId ?? null,
             idempotencyKey: input.idempotencyKey,
           })
+          .onConflictDoNothing({
+            target: [transactions.userId, transactions.idempotencyKey],
+          })
+          .returning();
+
+        if (!transactionResult[0]) {
+          const existing = await tx
+            .select()
+            .from(transactions)
+            .where(
+              and(
+                eq(transactions.userId, userId),
+                eq(transactions.idempotencyKey, input.idempotencyKey),
+              ),
+            )
+            .limit(1);
+
+          if (!existing[0]) {
+            throw new Error("IDEMPOTENCY_TRANSACTION_NOT_FOUND");
+          }
+
+          return { transaction: existing[0] };
+        }
+
+        const walletResultLocked = await tx
+          .select()
+          .from(wallets)
+          .where(
+            and(
+              eq(wallets.id, input.walletId),
+              eq(wallets.userId, userId),
+              isNull(wallets.archivedAt),
+            ),
+          )
+          .for("update");
+
+        const wallet = walletResultLocked[0];
+
+        if (!wallet) {
+          throw new Error("WALLET_NOT_FOUND");
+        }
+
+        const updatedWallet = await tx
+          .update(wallets)
+          .set({
+            balance: sql`${wallets.balance} + ${input.amount}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(wallets.id, wallet.id))
           .returning();
 
         return {
@@ -551,6 +597,76 @@ export async function createTransaction(
       }
 
       case "expense": {
+        const walletExists = await tx
+          .select({ id: wallets.id })
+          .from(wallets)
+          .where(
+            and(
+              eq(wallets.id, input.walletId),
+              eq(wallets.userId, userId),
+              isNull(wallets.archivedAt),
+            ),
+          )
+          .limit(1);
+
+        if (!walletExists[0]) {
+          throw new Error("WALLET_NOT_FOUND");
+        }
+
+        const categoryResult = await tx
+          .select()
+          .from(categories)
+          .where(
+            and(
+              eq(categories.id, input.categoryId),
+              eq(categories.userId, userId),
+              isNull(categories.archivedAt),
+            ),
+          )
+          .limit(1);
+
+        const category = categoryResult[0];
+
+        if (!category) {
+          throw new Error("CATEGORY_NOT_FOUND");
+        }
+
+        const transactionResult = await tx
+          .insert(transactions)
+          .values({
+            userId,
+            type: "expense",
+            walletId: input.walletId,
+            amount: input.amount,
+            description: input.description ?? null,
+            transactionDate: input.transactionDate,
+            categoryId: category.id,
+            idempotencyKey: input.idempotencyKey,
+          })
+          .onConflictDoNothing({
+            target: [transactions.userId, transactions.idempotencyKey],
+          })
+          .returning();
+
+        if (!transactionResult[0]) {
+          const existing = await tx
+            .select()
+            .from(transactions)
+            .where(
+              and(
+                eq(transactions.userId, userId),
+                eq(transactions.idempotencyKey, input.idempotencyKey),
+              ),
+            )
+            .limit(1);
+
+          if (!existing[0]) {
+            throw new Error("IDEMPOTENCY_TRANSACTION_NOT_FOUND");
+          }
+
+          return { transaction: existing[0] };
+        }
+
         const walletResult = await tx
           .select()
           .from(wallets)
@@ -573,29 +689,13 @@ export async function createTransaction(
           throw new Error("INSUFFICIENT_BALANCE");
         }
 
-        const newBalance = wallet.balance - input.amount;
-
         const updatedWallet = await tx
           .update(wallets)
           .set({
-            balance: newBalance,
+            balance: sql`${wallets.balance} - ${input.amount}`,
             updatedAt: new Date(),
           })
           .where(eq(wallets.id, wallet.id))
-          .returning();
-
-        const transactionResult = await tx
-          .insert(transactions)
-          .values({
-            userId,
-            type: "expense",
-            walletId: wallet.id,
-            amount: input.amount,
-            description: input.description ?? null,
-            transactionDate: input.transactionDate,
-            categoryId: input.categoryId,
-            idempotencyKey: input.idempotencyKey,
-          })
           .returning();
 
         return {
@@ -605,6 +705,74 @@ export async function createTransaction(
       }
 
       case "refund": {
+        const walletExists = await tx
+          .select({ id: wallets.id })
+          .from(wallets)
+          .where(
+            and(
+              eq(wallets.id, input.walletId),
+              eq(wallets.userId, userId),
+              isNull(wallets.archivedAt),
+            ),
+          )
+          .limit(1);
+
+        if (!walletExists[0]) {
+          throw new Error("WALLET_NOT_FOUND");
+        }
+
+        const goalExists = await tx
+          .select({ id: financialGoals.id })
+          .from(financialGoals)
+          .where(
+            and(
+              eq(financialGoals.id, input.goalId),
+              eq(financialGoals.userId, userId),
+              isNull(financialGoals.archivedAt),
+            ),
+          )
+          .limit(1);
+
+        if (!goalExists[0]) {
+          throw new Error("GOAL_NOT_FOUND");
+        }
+
+        const transactionResult = await tx
+          .insert(transactions)
+          .values({
+            userId,
+            type: "refund",
+            walletId: input.walletId,
+            goalId: input.goalId,
+            amount: input.amount,
+            description: input.description ?? null,
+            transactionDate: input.transactionDate,
+            idempotencyKey: input.idempotencyKey,
+          })
+          .onConflictDoNothing({
+            target: [transactions.userId, transactions.idempotencyKey],
+          })
+          .returning();
+
+        if (!transactionResult[0]) {
+          const existing = await tx
+            .select()
+            .from(transactions)
+            .where(
+              and(
+                eq(transactions.userId, userId),
+                eq(transactions.idempotencyKey, input.idempotencyKey),
+              ),
+            )
+            .limit(1);
+
+          if (!existing[0]) {
+            throw new Error("IDEMPOTENCY_TRANSACTION_NOT_FOUND");
+          }
+
+          return { transaction: existing[0] };
+        }
+
         const walletResult = await tx
           .select()
           .from(wallets)
@@ -652,7 +820,7 @@ export async function createTransaction(
         const updatedWallet = await tx
           .update(wallets)
           .set({
-            balance: wallet.balance + input.amount,
+            balance: sql`${wallets.balance} + ${input.amount}`,
             updatedAt: new Date(),
           })
           .where(eq(wallets.id, wallet.id))
@@ -661,25 +829,11 @@ export async function createTransaction(
         const updatedGoal = await tx
           .update(financialGoals)
           .set({
-            allocatedAmount: goal.allocatedAmount - input.amount,
-            returnedAmount: goal.returnedAmount + input.amount,
+            allocatedAmount: sql`${financialGoals.allocatedAmount} - ${input.amount}`,
+            returnedAmount: sql`${financialGoals.returnedAmount} + ${input.amount}`,
             updatedAt: new Date(),
           })
           .where(eq(financialGoals.id, goal.id))
-          .returning();
-
-        const transactionResult = await tx
-          .insert(transactions)
-          .values({
-            userId,
-            type: "refund",
-            walletId: wallet.id,
-            goalId: goal.id,
-            amount: input.amount,
-            description: input.description ?? null,
-            transactionDate: input.transactionDate,
-            idempotencyKey: input.idempotencyKey,
-          })
           .returning();
 
         return {
@@ -692,6 +846,57 @@ export async function createTransaction(
       case "transfer": {
         if (input.fromWalletId === input.toWalletId) {
           throw new Error("TRANSFER_SAME_WALLET");
+        }
+
+        const walletExists = await tx
+          .select({ id: wallets.id })
+          .from(wallets)
+          .where(
+            and(
+              eq(wallets.userId, userId),
+              inArray(wallets.id, [input.fromWalletId, input.toWalletId]),
+              isNull(wallets.archivedAt),
+            ),
+          );
+
+        if (walletExists.length !== 2) {
+          throw new Error("WALLET_NOT_FOUND");
+        }
+
+        const transactionResult = await tx
+          .insert(transactions)
+          .values({
+            userId,
+            type: "transfer",
+            fromWalletId: input.fromWalletId,
+            toWalletId: input.toWalletId,
+            amount: input.amount,
+            description: input.description ?? null,
+            transactionDate: input.transactionDate,
+            idempotencyKey: input.idempotencyKey,
+          })
+          .onConflictDoNothing({
+            target: [transactions.userId, transactions.idempotencyKey],
+          })
+          .returning();
+
+        if (!transactionResult[0]) {
+          const existing = await tx
+            .select()
+            .from(transactions)
+            .where(
+              and(
+                eq(transactions.userId, userId),
+                eq(transactions.idempotencyKey, input.idempotencyKey),
+              ),
+            )
+            .limit(1);
+
+          if (!existing[0]) {
+            throw new Error("IDEMPOTENCY_TRANSACTION_NOT_FOUND");
+          }
+
+          return { transaction: existing[0] };
         }
 
         const walletIds = [input.fromWalletId, input.toWalletId].sort();
@@ -728,7 +933,7 @@ export async function createTransaction(
         const updatedFromWallet = await tx
           .update(wallets)
           .set({
-            balance: fromWallet.balance - input.amount,
+            balance: sql`${wallets.balance} - ${input.amount}`,
             updatedAt: new Date(),
           })
           .where(eq(wallets.id, fromWallet.id))
@@ -737,24 +942,10 @@ export async function createTransaction(
         const updatedToWallet = await tx
           .update(wallets)
           .set({
-            balance: toWallet.balance + input.amount,
+            balance: sql`${wallets.balance} + ${input.amount}`,
             updatedAt: new Date(),
           })
           .where(eq(wallets.id, toWallet.id))
-          .returning();
-
-        const transactionResult = await tx
-          .insert(transactions)
-          .values({
-            userId,
-            type: "transfer",
-            fromWalletId: fromWallet.id,
-            toWalletId: toWallet.id,
-            amount: input.amount,
-            description: input.description ?? null,
-            transactionDate: input.transactionDate,
-            idempotencyKey: input.idempotencyKey,
-          })
           .returning();
 
         return {
@@ -772,21 +963,91 @@ export async function createGoalSpending(
   input: Extract<CreateTransactionInput, { type: "goal_spending" }>,
 ) {
   return db.transaction(async (tx) => {
-    const existingTransaction = await tx
-      .select()
-      .from(transactions)
+    const walletExists = await tx
+      .select({ id: wallets.id })
+      .from(wallets)
       .where(
         and(
-          eq(transactions.userId, userId),
-          eq(transactions.idempotencyKey, input.idempotencyKey),
+          eq(wallets.id, input.walletId),
+          eq(wallets.userId, userId),
+          isNull(wallets.archivedAt),
         ),
       )
       .limit(1);
 
-    if (existingTransaction[0]) {
-      return {
-        transaction: existingTransaction[0],
-      };
+    if (!walletExists[0]) {
+      throw new Error("WALLET_NOT_FOUND");
+    }
+
+    const goalExists = await tx
+      .select({ id: financialGoals.id })
+      .from(financialGoals)
+      .where(
+        and(
+          eq(financialGoals.id, input.goalId),
+          eq(financialGoals.userId, userId),
+          isNull(financialGoals.archivedAt),
+        ),
+      )
+      .limit(1);
+
+    if (!goalExists[0]) {
+      throw new Error("GOAL_NOT_FOUND");
+    }
+
+    const categoryResult = await tx
+      .select()
+      .from(categories)
+      .where(
+        and(
+          eq(categories.id, input.categoryId),
+          eq(categories.userId, userId),
+          isNull(categories.archivedAt),
+        ),
+      )
+      .limit(1);
+
+    const category = categoryResult[0];
+
+    if (!category) {
+      throw new Error("CATEGORY_NOT_FOUND");
+    }
+
+    const transactionResult = await tx
+      .insert(transactions)
+      .values({
+        userId,
+        type: "goal_spending",
+        walletId: input.walletId,
+        goalId: input.goalId,
+        categoryId: category.id,
+        amount: input.amount,
+        description: input.description ?? null,
+        transactionDate: input.transactionDate,
+        idempotencyKey: input.idempotencyKey,
+      })
+      .onConflictDoNothing({
+        target: [transactions.userId, transactions.idempotencyKey],
+      })
+      .returning();
+
+    if (!transactionResult[0]) {
+      const existing = await tx
+        .select()
+        .from(transactions)
+        .where(
+          and(
+            eq(transactions.userId, userId),
+            eq(transactions.idempotencyKey, input.idempotencyKey),
+          ),
+        )
+        .limit(1);
+
+      if (!existing[0]) {
+        throw new Error("IDEMPOTENCY_TRANSACTION_NOT_FOUND");
+      }
+
+      return { transaction: existing[0] };
     }
 
     const walletResult = await tx
@@ -837,28 +1098,10 @@ export async function createGoalSpending(
       throw new Error("GOAL_ALLOCATED_AMOUNT_INVALID");
     }
 
-    const categoryResult = await tx
-      .select()
-      .from(categories)
-      .where(
-        and(
-          eq(categories.id, input.categoryId),
-          eq(categories.userId, userId),
-          isNull(categories.archivedAt),
-        ),
-      )
-      .limit(1);
-
-    const category = categoryResult[0];
-
-    if (!category) {
-      throw new Error("CATEGORY_NOT_FOUND");
-    }
-
     const updatedWallet = await tx
       .update(wallets)
       .set({
-        balance: wallet.balance - input.amount,
+        balance: sql`${wallets.balance} - ${input.amount}`,
         updatedAt: new Date(),
       })
       .where(eq(wallets.id, wallet.id))
@@ -867,26 +1110,11 @@ export async function createGoalSpending(
     const updatedGoal = await tx
       .update(financialGoals)
       .set({
-        allocatedAmount: goal.allocatedAmount - input.amount,
-        spentAmount: goal.spentAmount + input.amount,
+        allocatedAmount: sql`${financialGoals.allocatedAmount} - ${input.amount}`,
+        spentAmount: sql`${financialGoals.spentAmount} + ${input.amount}`,
         updatedAt: new Date(),
       })
       .where(eq(financialGoals.id, goal.id))
-      .returning();
-
-    const transactionResult = await tx
-      .insert(transactions)
-      .values({
-        userId,
-        type: "goal_spending",
-        walletId: wallet.id,
-        goalId: goal.id,
-        categoryId: category.id,
-        amount: input.amount,
-        description: input.description ?? null,
-        transactionDate: input.transactionDate,
-        idempotencyKey: input.idempotencyKey,
-      })
       .returning();
 
     return {
@@ -902,21 +1130,72 @@ export async function createAllocation(
   input: Extract<CreateTransactionInput, { type: "allocation" }>,
 ) {
   return db.transaction(async (tx) => {
-    const existingTransaction = await tx
-      .select()
-      .from(transactions)
+    const walletExists = await tx
+      .select({ id: wallets.id })
+      .from(wallets)
       .where(
         and(
-          eq(transactions.userId, userId),
-          eq(transactions.idempotencyKey, input.idempotencyKey),
+          eq(wallets.id, input.fromWalletId),
+          eq(wallets.userId, userId),
+          isNull(wallets.archivedAt),
         ),
       )
       .limit(1);
 
-    if (existingTransaction[0]) {
-      return {
-        transaction: existingTransaction[0],
-      };
+    if (!walletExists[0]) {
+      throw new Error("WALLET_NOT_FOUND");
+    }
+
+    const goalExists = await tx
+      .select({ id: financialGoals.id })
+      .from(financialGoals)
+      .where(
+        and(
+          eq(financialGoals.id, input.goalId),
+          eq(financialGoals.userId, userId),
+          isNull(financialGoals.archivedAt),
+        ),
+      )
+      .limit(1);
+
+    if (!goalExists[0]) {
+      throw new Error("GOAL_NOT_FOUND");
+    }
+
+    const transactionResult = await tx
+      .insert(transactions)
+      .values({
+        userId,
+        type: "allocation",
+        fromWalletId: input.fromWalletId,
+        goalId: input.goalId,
+        amount: input.amount,
+        description: input.description ?? null,
+        transactionDate: input.transactionDate,
+        idempotencyKey: input.idempotencyKey,
+      })
+      .onConflictDoNothing({
+        target: [transactions.userId, transactions.idempotencyKey],
+      })
+      .returning();
+
+    if (!transactionResult[0]) {
+      const existing = await tx
+        .select()
+        .from(transactions)
+        .where(
+          and(
+            eq(transactions.userId, userId),
+            eq(transactions.idempotencyKey, input.idempotencyKey),
+          ),
+        )
+        .limit(1);
+
+      if (!existing[0]) {
+        throw new Error("IDEMPOTENCY_TRANSACTION_NOT_FOUND");
+      }
+
+      return { transaction: existing[0] };
     }
 
     const walletResult = await tx
@@ -937,25 +1216,7 @@ export async function createAllocation(
       throw new Error("WALLET_NOT_FOUND");
     }
 
-    const allocationResult = await tx
-      .select({
-        total: sql<number>`COALESCE(SUM(${transactions.amount}), 0)`,
-      })
-      .from(transactions)
-      .where(
-        and(
-          eq(transactions.userId, userId),
-          eq(transactions.fromWalletId, wallet.id),
-          eq(transactions.type, "allocation"),
-          eq(transactions.status, "active"),
-        ),
-      );
-
-    const activeAllocationAmount = Number(allocationResult[0]?.total ?? 0);
-
-    const availableBalance = wallet.balance - activeAllocationAmount;
-
-    if (availableBalance < input.amount) {
+    if (wallet.balance < input.amount) {
       throw new Error("INSUFFICIENT_BALANCE");
     }
 
@@ -984,7 +1245,7 @@ export async function createAllocation(
     const updatedWallet = await tx
       .update(wallets)
       .set({
-        balance: wallet.balance - input.amount,
+        balance: sql`${wallets.balance} - ${input.amount}`,
         updatedAt: new Date(),
       })
       .where(eq(wallets.id, wallet.id))
@@ -993,25 +1254,11 @@ export async function createAllocation(
     const updatedGoal = await tx
       .update(financialGoals)
       .set({
-        totalContributed: goal.totalContributed + input.amount,
-        allocatedAmount: goal.allocatedAmount + input.amount,
+        totalContributed: sql`${financialGoals.totalContributed} + ${input.amount}`,
+        allocatedAmount: sql`${financialGoals.allocatedAmount} + ${input.amount}`,
         updatedAt: new Date(),
       })
       .where(eq(financialGoals.id, goal.id))
-      .returning();
-
-    const transactionResult = await tx
-      .insert(transactions)
-      .values({
-        userId,
-        type: "allocation",
-        fromWalletId: wallet.id,
-        goalId: goal.id,
-        amount: input.amount,
-        description: input.description ?? null,
-        transactionDate: input.transactionDate,
-        idempotencyKey: input.idempotencyKey,
-      })
       .returning();
 
     return {
@@ -1021,3 +1268,4 @@ export async function createAllocation(
     };
   });
 }
+
