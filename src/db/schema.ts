@@ -7,6 +7,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
@@ -115,9 +116,7 @@ export const verifications = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => ({
-    identifierIdx: index("verification_identifier_idx").on(
-      table.identifier,
-    ),
+    identifierIdx: index("verification_identifier_idx").on(table.identifier),
   }),
 );
 
@@ -188,9 +187,7 @@ export const financialGoals = pgTable(
 
     targetDate: timestamp("target_date"),
 
-    status: financialGoalStatusEnum("status")
-      .notNull()
-      .default("active"),
+    status: financialGoalStatusEnum("status").notNull().default("active"),
 
     archivedAt: timestamp("archived_at"),
 
@@ -229,11 +226,9 @@ export const transactions = pgTable(
 
     transactionDate: timestamp("transaction_date").notNull(),
 
-    status: transactionStatusEnum("status")
-      .notNull()
-      .default("active"),
+    status: transactionStatusEnum("status").notNull().default("active"),
 
-    idempotencyKey: varchar("idempotency_key", { length: 255 }),
+    idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
 
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -244,13 +239,12 @@ export const transactions = pgTable(
     fromWalletIdIdx: index("transactions_from_wallet_id_idx").on(
       table.fromWalletId,
     ),
-    toWalletIdIdx: index("transactions_to_wallet_id_idx").on(
-      table.toWalletId,
-    ),
+    toWalletIdIdx: index("transactions_to_wallet_id_idx").on(table.toWalletId),
     goalIdIdx: index("transactions_goal_id_idx").on(table.goalId),
-    categoryIdIdx: index("transactions_category_id_idx").on(
-      table.categoryId,
-    ),
+    categoryIdIdx: index("transactions_category_id_idx").on(table.categoryId),
+    idempotencyKeyUniqueIdx: uniqueIndex(
+      "transactions_user_idempotency_unique",
+    ).on(table.userId, table.idempotencyKey),
   }),
 );
 
@@ -286,17 +280,14 @@ export const walletsRelations = relations(wallets, ({ one, many }) => ({
   transactions: many(transactions),
 }));
 
-export const categoriesRelations = relations(
-  categories,
-  ({ one, many }) => ({
-    user: one(users, {
-      fields: [categories.userId],
-      references: [users.id],
-    }),
-
-    transactions: many(transactions),
+export const categoriesRelations = relations(categories, ({ one, many }) => ({
+  user: one(users, {
+    fields: [categories.userId],
+    references: [users.id],
   }),
-);
+
+  transactions: many(transactions),
+}));
 
 export const financialGoalsRelations = relations(
   financialGoals,
@@ -310,37 +301,34 @@ export const financialGoalsRelations = relations(
   }),
 );
 
-export const transactionsRelations = relations(
-  transactions,
-  ({ one }) => ({
-    user: one(users, {
-      fields: [transactions.userId],
-      references: [users.id],
-    }),
-
-    wallet: one(wallets, {
-      fields: [transactions.walletId],
-      references: [wallets.id],
-    }),
-
-    fromWallet: one(wallets, {
-      fields: [transactions.fromWalletId],
-      references: [wallets.id],
-    }),
-
-    toWallet: one(wallets, {
-      fields: [transactions.toWalletId],
-      references: [wallets.id],
-    }),
-
-    goal: one(financialGoals, {
-      fields: [transactions.goalId],
-      references: [financialGoals.id],
-    }),
-
-    category: one(categories, {
-      fields: [transactions.categoryId],
-      references: [categories.id],
-    }),
+export const transactionsRelations = relations(transactions, ({ one }) => ({
+  user: one(users, {
+    fields: [transactions.userId],
+    references: [users.id],
   }),
-);
+
+  wallet: one(wallets, {
+    fields: [transactions.walletId],
+    references: [wallets.id],
+  }),
+
+  fromWallet: one(wallets, {
+    fields: [transactions.fromWalletId],
+    references: [wallets.id],
+  }),
+
+  toWallet: one(wallets, {
+    fields: [transactions.toWalletId],
+    references: [wallets.id],
+  }),
+
+  goal: one(financialGoals, {
+    fields: [transactions.goalId],
+    references: [financialGoals.id],
+  }),
+
+  category: one(categories, {
+    fields: [transactions.categoryId],
+    references: [categories.id],
+  }),
+}));

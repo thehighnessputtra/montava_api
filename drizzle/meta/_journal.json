@@ -22,6 +22,13 @@
       "when": 1789703355616,
       "tag": "0002_brainy_bishop",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789979263717,
+      "tag": "0003_spooky_maverick",
+      "breakpoints": true
     }
   ]
 }
