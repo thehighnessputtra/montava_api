@@ -9,6 +9,7 @@ import { authRoutes } from "./routes/auth.js";
 import { walletRoutes } from "./routes/wallets.js";
 import { transactionRoutes } from "./routes/transactions.js";
 import { categoryRoutes } from "./routes/categories.js";
+import { financialGoalRoutes } from "./routes/financialGoals.js";
 
 export function buildApp() {
   const app = Fastify({ logger: true });
@@ -55,6 +56,7 @@ export function buildApp() {
   app.register(walletRoutes);
   app.register(transactionRoutes);
   app.register(categoryRoutes);
+  app.register(financialGoalRoutes);
 
   return app;
 }

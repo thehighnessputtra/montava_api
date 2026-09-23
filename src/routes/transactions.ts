@@ -6,6 +6,8 @@ import {
 } from "../schemas/transaction.js";
 import {
   cancelTransaction,
+  createAllocation,
+  createGoalSpending,
   createTransaction,
   getTransactionById,
   getTransactions,
@@ -54,6 +56,42 @@ export async function transactionRoutes(app: FastifyInstance) {
             "Transaction wallet reference is missing",
           );
 
+        case "GOAL_NOT_FOUND":
+          throw app.httpErrors.notFound("Financial goal not found");
+
+        case "GOAL_NOT_ACTIVE":
+          throw app.httpErrors.badRequest("Financial goal is not active");
+
+        case "GOAL_ALLOCATED_AMOUNT_INVALID":
+          throw app.httpErrors.badRequest("Goal allocated amount is invalid");
+
+        case "GOAL_SPENT_AMOUNT_INVALID":
+          throw app.httpErrors.badRequest("Goal spent amount is invalid");
+
+        case "TRANSACTION_ALLOCATION_REFERENCE_NOT_FOUND":
+          throw app.httpErrors.badRequest(
+            "Allocation transaction reference is missing",
+          );
+
+        case "TRANSACTION_GOAL_SPENDING_REFERENCE_NOT_FOUND":
+          throw app.httpErrors.badRequest(
+            "Goal spending transaction reference is missing",
+          );
+
+        case "TRANSACTION_REFUND_REFERENCE_NOT_FOUND":
+          throw app.httpErrors.badRequest(
+            "Refund transaction reference is missing",
+          );
+
+        case "GOAL_RETURNED_AMOUNT_INVALID":
+          throw app.httpErrors.badRequest("Goal returned amount is invalid");
+
+        case "INSUFFICIENT_BALANCE":
+          throw app.httpErrors.badRequest("Insufficient wallet balance");
+
+        case "CATEGORY_NOT_FOUND":
+          throw app.httpErrors.notFound("Category not found");
+
         default:
           throw error;
       }
@@ -65,7 +103,12 @@ export async function transactionRoutes(app: FastifyInstance) {
     const input = createTransactionSchema.parse(request.body);
 
     try {
-      const result = await createTransaction(session.user.id, input);
+      const result =
+        input.type === "allocation"
+          ? await createAllocation(session.user.id, input)
+          : input.type === "goal_spending"
+            ? await createGoalSpending(session.user.id, input)
+            : await createTransaction(session.user.id, input);
 
       return reply.code(201).send({
         data: result,
@@ -79,6 +122,18 @@ export async function transactionRoutes(app: FastifyInstance) {
         case "WALLET_NOT_FOUND":
           throw app.httpErrors.notFound("Wallet not found");
 
+        case "GOAL_NOT_FOUND":
+          throw app.httpErrors.notFound("Financial goal not found");
+
+        case "GOAL_NOT_ACTIVE":
+          throw app.httpErrors.badRequest("Financial goal is not active");
+
+        case "GOAL_ALLOCATED_AMOUNT_INVALID":
+          throw app.httpErrors.badRequest("Goal allocated amount is invalid");
+
+        case "CATEGORY_NOT_FOUND":
+          throw app.httpErrors.notFound("Category not found");
+
         case "INSUFFICIENT_BALANCE":
           throw app.httpErrors.badRequest("Insufficient wallet balance");
 
@@ -86,6 +141,14 @@ export async function transactionRoutes(app: FastifyInstance) {
           throw app.httpErrors.badRequest(
             "Source and destination wallet must be different",
           );
+
+        case "TRANSACTION_REFUND_REFERENCE_NOT_FOUND":
+          throw app.httpErrors.badRequest(
+            "Refund transaction reference is missing",
+          );
+
+        case "GOAL_RETURNED_AMOUNT_INVALID":
+          throw app.httpErrors.badRequest("Goal returned amount is invalid");
 
         default:
           throw error;
